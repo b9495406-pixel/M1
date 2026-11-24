@@ -1,0 +1,14 @@
+{
+  "name": "khademak-system-bot",
+  "version": "1.0.0",
+  "description": "نظام خادمك - بوت ديسكورد متكامل مع واجهة ويب",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
+  }
+}
