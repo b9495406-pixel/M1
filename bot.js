@@ -267,7 +267,7 @@ client.on('interactionCreate', async (interaction) => {
       const id = interaction.customId;
       if (!id.startsWith('sug_')) return;
 
-      const parts = id.split('_'); // sug | action | msgId
+      const parts = id.split('_');
       const action = parts[1];
       const msgId = parts.slice(2).join('_');
       const sug = suggestionsData[msgId];
@@ -451,7 +451,6 @@ client.on('messageCreate', async (message) => {
   if (!message.guild) return;
   if (message.author.id === client.user.id) return;
 
-  // 1. تحويل أي رسالة في روم الاقتراحات إلى إيمبد بأزرار التصويت والمعاقبة والتنفيذ
   if (message.channel.id === SUGGESTIONS_CHANNEL_ID) {
     if (message.webhookId) return;
     const suggestionText = message.content.trim();
@@ -492,7 +491,6 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // 2. استقبال أوامر الإدارة والنقاط بالبادئة ? في الروم المحدد
   if (message.channel.id !== MOD_COMMANDS_CHANNEL_ID) return;
 
   const content = message.content.trim();
@@ -579,4 +577,7 @@ client.on('messageCreate', async (message) => {
         if (!toId || !amount || amount <= 0 || toId === actorId) {
           return message.reply(`❌ الصيغة: \`${PREFIX}transfer <@ID> <العدد>\``).catch(() => {});
         }
-        const sender = ensureUser(actorI
+        const sender = ensureUser(actorId, actorName);
+        if (sender.balance < amount) {
+          return message.reply(`❌ رصيدك غير كافٍ. رصيدك الحالي: **${sender.balance}** نقطة.`).catch(() => {});
+    }
