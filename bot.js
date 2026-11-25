@@ -1,4 +1,6 @@
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 const {
   Client,
   GatewayIntentBits,
@@ -9,6 +11,8 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const MOD_COMMANDS_CHANNEL_ID = process.env.MOD_COMMANDS_CHANNEL_ID || '1574914496567185509';
 const LOGS_CHANNEL_ID = process.env.LOGS_CHANNEL_ID || '';
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID || '';
+const PREFIX = process.env.BOT_PREFIX || '?';
+const DATA_FILE = path.join(__dirname, 'economy_data.json');
 
 if (!BOT_TOKEN) {
   console.error('❌ BOT_TOKEN غير موجود في متغيرات البيئة.');
@@ -24,6 +28,62 @@ const client = new Client({
     GatewayIntentBits.DirectMessages
   ]
 });
+
+// تحميل أو إنشاء قاعدة بيانات النقاط والعمليات
+function loadEconomyData() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      return {
+        users: raw.users || {},
+        transactions: raw.transactions || []
+      };
+    }
+  } catch (err) {
+    console.error('Error loading economy_data.json:', err);
+  }
+  return { users: {}, transactions: [] };
+}
+
+function saveEconomyData(data) {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Error saving economy_data.json:', err);
+  }
+}
+
+let economyData = loadEconomyData();
+
+function ensureUser(userId, username = 'مستخدم') {
+  if (!economyData.users[userId]) {
+    economyData.users[userId] = {
+      id: userId,
+      username,
+      balance: 0,
+      lastDaily: 0,
+      lastWork: 0
+    };
+  } else if (username && username !== 'مستخدم') {
+    economyData.users[userId].username = username;
+  }
+  return economyData.users[userId];
+}
+
+function recordTransaction(type, userId, username, amount, note) {
+  const entry = {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type,
+    userId,
+    username,
+    amount,
+    note,
+    timestamp: new Date().toISOString()
+  };
+  economyData.transactions.unshift(entry);
+  economyData.transactions = economyData.transactions.slice(0, 100);
+  saveEconomyData(economyData);
+}
 
 function parseDurationToMs(str) {
   if (!str) return null;
@@ -88,7 +148,8 @@ client.on('guildMemberRemove', async (member) => {
 
 client.once('ready', () => {
   console.log(`✅ البوت جاهز وأونلاين باسم: ${client.user.tag}`);
-  console.log(`📌 روم استقبال أوامر الإدارة: ${MOD_COMMANDS_CHANNEL_ID}`);
+  console.log(`⚡ البادئة النشطة: ${PREFIX}`);
+  console.log(`📌 روم استقبال الأوامر: ${MOD_COMMANDS_CHANNEL_ID}`);
 });
 
 client.on('messageCreate', async (message) => {
@@ -97,21 +158,122 @@ client.on('messageCreate', async (message) => {
   if (message.channel.id !== MOD_COMMANDS_CHANNEL_ID) return;
 
   const content = message.content.trim();
-  if (!content.startsWith('!')) return;
+  if (!content.startsWith(PREFIX)) return;
 
-  const args = content.slice(1).trim().split(/\s+/);
+  const args = content.slice(PREFIX.length).trim().split(/\s+/);
   const rawCmd = (args.shift() || '').toLowerCase();
   const cmd = rawCmd === 'muet' ? 'mute' : rawCmd;
 
-  const allowedCmds = ['mute', 'unmute', 'ban', 'unban', 'kick', 'addrole', 'removerole', 'clear', 'warn'];
-  if (!allowedCmds.includes(cmd)) return;
+  const economyCmds = ['balance', 'bal', 'points', 'daily', 'work', 'addpoints', 'removepoints', 'transfer', 'top'];
+  const modCmds = ['mute', 'unmute', 'ban', 'unban', 'kick', 'addrole', 'removerole', 'clear', 'warn'];
+
+  if (!economyCmds.includes(cmd) && !modCmds.includes(cmd)) return;
 
   try {
-    // أمر حذف رسائل: !clear <عدد> [channelId]
+    // ==================== أوامر العملة والنقاط ====================
+    if (economyCmds.includes(cmd)) {
+      const actorId = message.author.webhookId ? (extractId(args[0]) || message.author.id) : message.author.id;
+      const actorMember = await message.guild.members.fetch(actorId).catch(() => null);
+      const actorName = actorMember?.user?.username || message.author.username || 'مستخدم';
+
+      if (cmd === 'balance' || cmd === 'bal' || cmd === 'points') {
+        const targetId = extractId(args[0]) || actorId;
+        const targetMember = await message.guild.members.fetch(targetId).catch(() => null);
+        const u = ensureUser(targetId, targetMember?.user?.username);
+        saveEconomyData(economyData);
+        return message.reply(`💰 رصيد <@${targetId}>: **${u.balance}** نقطة`).catch(() => {});
+      }
+
+      if (cmd === 'daily') {
+        const u = ensureUser(actorId, actorName);
+        const now = Date.now();
+        const cooldown = 24 * 60 * 60 * 1000;
+        if (now - u.lastDaily < cooldown) {
+          const remainingHours = Math.ceil((cooldown - (now - u.lastDaily)) / (60 * 60 * 1000));
+          return message.reply(`⏳ لقد استلمت مكافأتك اليومية بالفعل. عد بعد **${remainingHours}** ساعة.`).catch(() => {});
+        }
+        const reward = 150;
+        u.balance += reward;
+        u.lastDaily = now;
+        recordTransaction('مكافأة يومية', actorId, u.username, reward, 'استلام مكافأة ?daily');
+        return message.reply(`🎁 حصل <@${actorId}> على **+${reward}** نقطة! الرصيد الحالي: **${u.balance}**`).catch(() => {});
+      }
+
+      if (cmd === 'work') {
+        const u = ensureUser(actorId, actorName);
+        const now = Date.now();
+        const cooldown = 30 * 60 * 1000;
+        if (now - u.lastWork < cooldown) {
+          const remainingMins = Math.ceil((cooldown - (now - u.lastWork)) / (60 * 1000));
+          return message.reply(`⏳ يمكنك العمل مرة أخرى بعد **${remainingMins}** دقيقة.`).catch(() => {});
+        }
+        const earned = Math.floor(Math.random() * 81) + 40; // من 40 إلى 120 نقطة
+        u.balance += earned;
+        u.lastWork = now;
+        recordTransaction('جمع نقاط (عمل)', actorId, u.username, earned, 'إتمام مهمة ?work');
+        return message.reply(`💼 جمع <@${actorId}> **+${earned}** نقطة من العمل! الرصيد الحالي: **${u.balance}**`).catch(() => {});
+      }
+
+      if (cmd === 'addpoints' || cmd === 'removepoints') {
+        const targetId = extractId(args[0]);
+        const amount = parseInt(args[1], 10);
+        if (!targetId || !amount || amount <= 0) {
+          return message.reply(`❌ الصيغة: \`${PREFIX}${cmd} <@ID> <العدد> [السبب]\``).catch(() => {});
+        }
+        const note = args.slice(2).join(' ').trim() || (cmd === 'addpoints' ? 'إضافة نقاط إدارية' : 'خصم نقاط إداري');
+        const targetMember = await message.guild.members.fetch(targetId).catch(() => null);
+        const u = ensureUser(targetId, targetMember?.user?.username);
+
+        if (cmd === 'addpoints') {
+          u.balance += amount;
+          recordTransaction('إضافة نقاط', targetId, u.username, amount, note);
+          return message.reply(`✅ تمت إضافة **+${amount}** نقطة إلى <@${targetId}> | الرصيد: **${u.balance}**`).catch(() => {});
+        } else {
+          const actualDeduct = Math.min(u.balance, amount);
+          u.balance -= actualDeduct;
+          recordTransaction('خصم نقاط', targetId, u.username, -actualDeduct, note);
+          return message.reply(`➖ تم خصم **${actualDeduct}** نقطة من <@${targetId}> | الرصيد: **${u.balance}**`).catch(() => {});
+        }
+      }
+
+      if (cmd === 'transfer') {
+        const toId = extractId(args[0]);
+        const amount = parseInt(args[1], 10);
+        if (!toId || !amount || amount <= 0 || toId === actorId) {
+          return message.reply(`❌ الصيغة: \`${PREFIX}transfer <@ID> <العدد>\``).catch(() => {});
+        }
+        const sender = ensureUser(actorId, actorName);
+        if (sender.balance < amount) {
+          return message.reply(`❌ رصيدك غير كافٍ. رصيدك الحالي: **${sender.balance}** نقطة.`).catch(() => {});
+        }
+        const receiverMember = await message.guild.members.fetch(toId).catch(() => null);
+        const receiver = ensureUser(toId, receiverMember?.user?.username);
+
+        sender.balance -= amount;
+        receiver.balance += amount;
+        recordTransaction('تحويل نقاط', actorId, sender.username, -amount, `تحويل إلى ${receiver.username}`);
+        recordTransaction('استلام تحويل', toId, receiver.username, amount, `تحويل من ${sender.username}`);
+        return message.reply(`💸 تم تحويل **${amount}** نقطة من <@${actorId}> إلى <@${toId}> بنجاح.`).catch(() => {});
+      }
+
+      if (cmd === 'top') {
+        const sorted = Object.values(economyData.users)
+          .sort((a, b) => b.balance - a.balance)
+          .slice(0, 5);
+        if (!sorted.length) {
+          return message.reply('📊 لا توجد بيانات نقاط مسجلة بعد.').catch(() => {});
+        }
+        const lines = sorted.map((u, i) => `**${i + 1}.** ${u.username} (\`${u.id}\`) — **${u.balance}** نقطة`);
+        return message.reply(`🏆 **أعلى الأعضاء نقاطاً:**\n${lines.join('\n')}`).catch(() => {});
+      }
+      return;
+    }
+
+    // ==================== أوامر الإدارة ====================
     if (cmd === 'clear') {
       const count = parseInt(args[0], 10);
       if (!count || count < 1 || count > 100) {
-        return message.reply('❌ حدد عدداً صحيحاً للرسائل من `1` إلى `100` (مثال: `!clear 20`).').catch(() => {});
+        return message.reply(`❌ حدد عدداً صحيحاً للرسائل من \`1\` إلى \`100\` (مثال: \`${PREFIX}clear 20\`).`).catch(() => {});
       }
       const targetChannelId = extractId(args[1]) || message.channel.id;
       const targetChannel = await message.guild.channels.fetch(targetChannelId).catch(() => null);
@@ -140,7 +302,6 @@ client.on('messageCreate', async (message) => {
 
     const member = await message.guild.members.fetch(targetId).catch(() => null);
 
-    // أمر تحذير/تنبيه: !warn <@ID> [dm|chat|channelId] <السبب>
     if (cmd === 'warn') {
       const targetUser = member?.user || await client.users.fetch(targetId).catch(() => null);
       if (!targetUser) {
@@ -339,8 +500,8 @@ client.on('messageCreate', async (message) => {
       }
     }
   } catch (err) {
-    console.error('Moderation execution error:', err);
-    await message.reply('❌ تعذر تنفيذ الإجراء: تأكد من صلاحيات البوت وترتيب رتبته فوق العضو أو الرتبة المستهدفة.').catch(() => {});
+    console.error('Moderation/Economy execution error:', err);
+    await message.reply('❌ تعذر تنفيذ الأمر: تأكد من صلاحيات البوت وترتيب رتبته وصحة البيانات.').catch(() => {});
   }
 });
 
