@@ -832,4 +832,13 @@ client.on('messageCreate', async (message) => {
   }
 });
 
+const { setupAdminPanel } = require('./adminPanel');
+
+setupAdminPanel(client, {
+  panelChannelId: process.env.ADMIN_PANEL_CHANNEL_ID || '1575525312014585886',
+  staffRoleId: process.env.STAFF_ROLE_ID || '1356920995658862594',
+  prefix: PREFIX,
+  sendModLog
+});
+
 client.login(BOT_TOKEN);
