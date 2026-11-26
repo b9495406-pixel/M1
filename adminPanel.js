@@ -530,3 +530,19 @@ function setupAdminPanel(client, options = {}) {
 }
 
 module.exports = { setupAdminPanel };
+async function initPanel() {
+    const channel = await client.channels.fetch(panelChannelId).catch((err) => {
+      console.error('❌ تعذر جلب روم لوحة الإدارة:', err.message);
+      return null;
+    });
+    if (channel) {
+      await postOrRefreshPanel(channel);
+      console.log(`✅ تم إرسال/تحديث لوحة الإدارة في الروم: ${panelChannelId}`);
+    }
+  }
+
+  client.once('ready', initPanel);
+  client.once('clientReady', initPanel);
+  if (client.isReady()) {
+    initPanel();
+  }
